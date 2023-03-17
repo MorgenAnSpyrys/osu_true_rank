@@ -7,12 +7,40 @@ extern crate tokio;
 use multimap::MultiMap;
 use rosu::{model::*, Osu};
 use serde::Deserialize;
-use std::{env, error::Error, ffi::OsString};
+use std::{env, error::Error, ffi::OsString, io};
 
 #[tokio::main]
 async fn main() {
-    let raw_data = fetch_data().await;
-    write_result(process_data(raw_data));
+    println!("Do you wish to normalize bonus pp to 416.6, or fetch it from the API? For normalization, type Y, for API fetch, type N");
+    let mut input_string = String::new();
+    let weighted_default;
+    loop {
+        if input_string.trim() == "N" {
+            println!("fetching bonuspp from api");
+            weighted_default = false;
+            break;
+        } else if input_string.trim() == "n" {
+            println!("fetching bonuspp from api");
+            weighted_default = false;
+            break;
+        } else if input_string.trim() == "Y" {
+            println!("defaulting to 416 bonus pp");
+            weighted_default = true;
+            break;
+        } else if input_string.trim() == "y" {
+            println!("defaulting to 416 bonus pp");
+            weighted_default = true;
+            break;
+        } else {
+            input_string.clear();
+            io::stdin().read_line(&mut input_string).unwrap();
+            println!("please enter either y or n");
+        }
+    }
+    let fetched_data = fetch_data().await;
+    let raw_data = fetched_data.0;
+    let bonuspp_data = fetched_data.1;
+    write_result(process_data(raw_data, weighted_default, bonuspp_data));
 }
 
 #[derive(Debug, Deserialize, PartialEq, PartialOrd, Clone)]
@@ -36,7 +64,7 @@ fn write_result(processed_data: Vec<User>) -> Result<(), Box<dyn Error>> {
     dir.push("output.csv");
     print!("Writing to: {}", dir.display());
     let mut wtr = csv::Writer::from_path(dir).expect("error creating writer");
-    wtr.write_record(&["user_id", "weighted_pp(+416 bonus)", "vec of scores"])?;
+    wtr.write_record(&["user_id", "weighted_pp", "vec of scores"])?;
     for i in 0..processed_data.len() {
         let mut top_scores_string = String::from("");
         for score in &processed_data[i].top_scores {
@@ -54,7 +82,7 @@ fn write_result(processed_data: Vec<User>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn fetch_data() -> MultiMap<u32, f32> {
+async fn fetch_data() -> (MultiMap<u32, f32>, MultiMap<u32, f32>) {
     let mut score_data = MultiMap::new();
     let csv_data = import_csv().expect("something went wrong during csv parsing");
     for n in csv_data {
@@ -67,21 +95,63 @@ async fn fetch_data() -> MultiMap<u32, f32> {
     }
 
     let api_data = import_api(uids).await;
+    let bonuspp_data = get_bpp(api_data.clone()).await;
 
     for n in api_data {
         score_data.insert(n.user_id, n.pp)
     }
 
-    return score_data;
+    return (score_data, bonuspp_data);
 }
 
-fn process_data(raw_data: MultiMap<u32, f32>) -> Vec<User> {
+async fn get_bpp(api_data: Vec<Record>) -> MultiMap<u32, f32> {
+    let mut user_scores = MultiMap::new();
+    let mut user_bpp = MultiMap::new();
+    for n in api_data {
+        user_scores.insert(n.user_id, n.pp);
+    }
+    const WEIGHT: f32 = 0.95;
+    for e in user_scores.clone() {
+        let total_pp = get_user_totalpp(
+            Osu::new(
+                get_second_arg()
+                    .expect("please provide your api key as the 2nd command line argument"),
+            ),
+            e.0,
+        )
+        .await;
+        let mut weighted_pp = 0.0;
+        let mut scores = user_scores.get_vec(&e.0).unwrap().to_owned();
+        scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        scores.reverse();
+        for n in 1..100 {
+            let pp_weighted = scores[n - 1] * WEIGHT.powi((n - 1).try_into().unwrap());
+            weighted_pp = weighted_pp + pp_weighted;
+        }
+        let result_pp = total_pp - weighted_pp;
+        user_bpp.insert(e.0, result_pp);
+    }
+    return user_bpp;
+}
+
+fn process_data(
+    raw_data: MultiMap<u32, f32>,
+    weighted_default: bool,
+    bonuspp_data: MultiMap<u32, f32>,
+) -> Vec<User> {
+    println!("Processing Data");
     let data = raw_data.clone();
     let mut processed_data: Vec<User> = Vec::new();
     const WEIGHT: f32 = 0.95;
-    let mut weighted_pp = 0.0;
-    for key in &data {
-        weighted_pp = 416.6;
+    let mut weighted_pp;
+    let fetch_weighted = weighted_default;
+    for key in data.clone() {
+        if fetch_weighted == false {
+            weighted_pp = 416.6;
+        } else {
+            weighted_pp = bonuspp_data.get(&key.0).unwrap_or(&416.6).to_owned();
+        }
+
         let mut scores = data.get_vec(&key.0).unwrap().to_owned();
         scores.sort_by(|a, b| a.partial_cmp(b).unwrap());
         scores.reverse();
@@ -90,7 +160,7 @@ fn process_data(raw_data: MultiMap<u32, f32>) -> Vec<User> {
             weighted_pp = weighted_pp + pp_weighted;
         }
         let temp_user = User {
-            user_id: *key.0,
+            user_id: key.0,
             pp_weighted: weighted_pp,
             top_scores: scores,
         };
@@ -116,7 +186,7 @@ async fn import_api(uids: Vec<u32>) -> Vec<Record> {
             .await
             .unwrap_or(Vec::new()),
         );
-        println!("ID {id} processed, {remaining} users remaining");
+        println!("ID {id} top scores fetched, {remaining} users remaining");
         if remaining > 0 {
             remaining = remaining - 1;
         }
@@ -137,6 +207,16 @@ async fn get_top_scores(osu: Osu, uid: u32) -> Option<Vec<Record>> {
         conv_scores.push(temp);
     }
     Some(conv_scores)
+}
+
+async fn get_user_totalpp(osu: Osu, uid: u32) -> f32 {
+    println!("fetching user {uid} bonuspp from api");
+    let request = osu.user(uid).await;
+    let output = request.ok().unwrap();
+    return match output {
+        Some(x) => x.pp_raw,
+        None => 416.6,
+    };
 }
 
 fn import_csv() -> Result<Vec<Record>, Box<dyn Error>> {
