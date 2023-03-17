@@ -1,5 +1,7 @@
 poorly written tool to do some screening shenanigans
 
+it fetches bonuspp from the api regardless of your choice at the start because it's already doing those api calls anyways to get the top100 scores and I was too lazy to properly separate it (even though api fetching bonus pp is not recommended)
+
 
 to run add elitebotix /osu-host tournamenttopplays output csv path as arg 1, apiv1 key as arg 2
 
