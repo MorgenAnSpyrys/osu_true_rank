@@ -146,7 +146,7 @@ fn process_data(
     let mut weighted_pp;
     let fetch_weighted = weighted_default;
     for key in data.clone() {
-        if fetch_weighted == false {
+        if fetch_weighted == true {
             weighted_pp = 416.6;
         } else {
             weighted_pp = bonuspp_data.get(&key.0).unwrap_or(&416.6).to_owned();
