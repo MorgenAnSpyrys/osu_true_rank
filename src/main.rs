@@ -15,32 +15,29 @@ async fn main() {
     let mut input_string = String::new();
     let weighted_default;
     loop {
-        if input_string.trim() == "N" {
-            println!("fetching bonuspp from api");
-            weighted_default = false;
-            break;
-        } else if input_string.trim() == "n" {
-            println!("fetching bonuspp from api");
-            weighted_default = false;
-            break;
-        } else if input_string.trim() == "Y" {
-            println!("defaulting to 416 bonus pp");
-            weighted_default = true;
-            break;
-        } else if input_string.trim() == "y" {
-            println!("defaulting to 416 bonus pp");
-            weighted_default = true;
-            break;
-        } else {
-            input_string.clear();
-            io::stdin().read_line(&mut input_string).unwrap();
-            println!("please enter either y or n");
+        match input_string.trim() {
+            "N" | "n" => {
+                println!("User has selected API Fetch");
+                weighted_default = false;
+                break;
+            }
+            "Y" | "y" => {
+                println!("User has selected 416.6 Default");
+                weighted_default = true;
+                break;
+            }
+            _ => {
+                input_string.clear();
+                io::stdin().read_line(&mut input_string).unwrap();
+                println!("please enter either y or n");
+            }
         }
     }
     let fetched_data = fetch_data().await;
     let raw_data = fetched_data.0;
     let bonuspp_data = fetched_data.1;
-    write_result(process_data(raw_data, weighted_default, bonuspp_data));
+    let processed_data = process_data(raw_data, weighted_default, bonuspp_data);
+    write_result(processed_data).expect("Error writing results to file");
 }
 
 #[derive(Debug, Deserialize, PartialEq, PartialOrd, Clone)]
